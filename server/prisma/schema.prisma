@@ -1,0 +1,532 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== USER & AUTH ====================
+
+model User {
+  id               String    @id @default(uuid())
+  email            String    @unique
+  passwordHash     String
+  username         String    @unique
+  displayName      String
+  avatarUrl        String?
+  avatarConfig     Json?     // Stores avatar customization data
+  dateOfBirth      DateTime?
+  isChild          Boolean   @default(false)
+  parentalControls Json?     // Parental control settings
+  emailVerified    Boolean   @default(false)
+  emailVerifyToken String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  lastSeenAt       DateTime?
+
+  // Relations
+  partnerships1             Partnership[]       @relation("User1")
+  partnerships2             Partnership[]       @relation("User2")
+  sessions                  Session[]
+  achievements              UserAchievement[]
+  notifications             Notification[]
+  voiceMessagesSent         VoiceMessage[]      @relation("Sender")
+  voiceMessagesReceived     VoiceMessage[]      @relation("Receiver")
+  inviteCodesCreated        InviteCode[]        @relation("CreatedBy")
+
+  // Game-specific relations
+  gardenPlots               GardenPlot[]
+  drawings                  Drawing[]
+  treasureProgress          TreasureProgress[]
+  gardenInventory           GardenInventory[]
+  treasureInventory         TreasureInventory[]
+  doodleUnlockables         DoodleUnlockable[]
+
+  @@index([email])
+  @@index([username])
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshToken String   @unique
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+  userAgent    String?
+  ipAddress    String?
+
+  @@index([userId])
+  @@index([refreshToken])
+}
+
+// ==================== PARTNERSHIP ====================
+
+model Partnership {
+  id         String            @id @default(uuid())
+  user1Id    String
+  user2Id    String
+  user1      User              @relation("User1", fields: [user1Id], references: [id], onDelete: Cascade)
+  user2      User              @relation("User2", fields: [user2Id], references: [id], onDelete: Cascade)
+  inviteCode String            @unique
+  status     PartnershipStatus @default(PENDING)
+  createdAt  DateTime          @default(now())
+  acceptedAt DateTime?
+
+  // Shared game data
+  sharedGarden       SharedGarden?
+  doodleSessions     DoodleSession[]
+  treasureMap        TreasureMap?
+  sharedAchievements SharedAchievement[]
+  activityFeed       ActivityFeedItem[]
+  doodleGallery      DoodleGallery?
+  gardenInventory    GardenInventory[]
+  doodleUnlockables  DoodleUnlockable[]
+  treasureInventory  TreasureInventory[]
+
+  @@unique([user1Id, user2Id])
+  @@index([inviteCode])
+}
+
+enum PartnershipStatus {
+  PENDING
+  ACTIVE
+  BLOCKED
+}
+
+model InviteCode {
+  id          String    @id @default(uuid())
+  code        String    @unique
+  createdById String
+  createdBy   User      @relation("CreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  usedById    String?
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([code])
+}
+
+// ==================== NOTIFICATIONS ====================
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  message   String
+  data      Json?            // Additional data (game ID, action URL, etc.)
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  @@index([userId, isRead])
+}
+
+enum NotificationType {
+  PARTNER_JOINED
+  PARTNER_ONLINE
+  GAME_UPDATE
+  GIFT_RECEIVED
+  ACHIEVEMENT_UNLOCKED
+  VOICE_MESSAGE
+  TURN_READY
+}
+
+// ==================== VOICE MESSAGES ====================
+
+model VoiceMessage {
+  id         String   @id @default(uuid())
+  senderId   String
+  receiverId String
+  sender     User     @relation("Sender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver   User     @relation("Receiver", fields: [receiverId], references: [id], onDelete: Cascade)
+  audioUrl   String
+  duration   Int      // Duration in seconds
+  context    String?  // Which game/item this is attached to
+  contextId  String?  // ID of the game item
+  isListened Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@index([receiverId, isListened])
+}
+
+// ==================== ACHIEVEMENTS ====================
+
+model Achievement {
+  id                 String              @id @default(uuid())
+  key                String              @unique // e.g., "garden_first_plant", "doodle_100_drawings"
+  name               String
+  description        String
+  iconUrl            String
+  category           String              // "garden", "doodle", "treasure", "general"
+  points             Int                 @default(10)
+  isShared           Boolean             @default(false) // Whether it's a shared achievement
+  requirement        Json                // Conditions to unlock
+  userAchievements   UserAchievement[]
+  sharedAchievements SharedAchievement[]
+}
+
+model UserAchievement {
+  id            String      @id @default(uuid())
+  userId        String
+  achievementId String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievement   Achievement @relation(fields: [achievementId], references: [id])
+  unlockedAt    DateTime    @default(now())
+  progress      Json?       // For progressive achievements
+
+  @@unique([userId, achievementId])
+}
+
+model SharedAchievement {
+  id            String      @id @default(uuid())
+  partnershipId String
+  achievementId String
+  partnership   Partnership @relation(fields: [partnershipId], references: [id], onDelete: Cascade)
+  achievement   Achievement @relation(fields: [achievementId], references: [id])
+  unlockedAt    DateTime    @default(now())
+  progress      Json?
+
+  @@unique([partnershipId, achievementId])
+}
+
+// ==================== ACTIVITY FEED ====================
+
+model ActivityFeedItem {
+  id            String       @id @default(uuid())
+  partnershipId String
+  partnership   Partnership  @relation(fields: [partnershipId], references: [id], onDelete: Cascade)
+  userId        String       // Who performed the action
+  type          ActivityType
+  game          String?      // "garden", "doodle", "treasure"
+  title         String
+  description   String
+  data          Json?        // Additional context
+  createdAt     DateTime     @default(now())
+
+  @@index([partnershipId, createdAt])
+}
+
+enum ActivityType {
+  GAME_PLAYED
+  GIFT_SENT
+  ACHIEVEMENT_UNLOCKED
+  ITEM_CREATED
+  MESSAGE_SENT
+  DISCOVERY_MADE
+}
+
+// ==================== GAME: SECRET GARDEN ====================
+
+model SharedGarden {
+  id            String           @id @default(uuid())
+  partnershipId String           @unique
+  partnership   Partnership      @relation(fields: [partnershipId], references: [id], onDelete: Cascade)
+  name          String           @default("Our Secret Garden")
+  weather       String           @default("sunny")
+  season        String           @default("spring")
+  totalPlants   Int              @default(0)
+  gardenLevel   Int              @default(1)
+  unlockedAreas Json             @default("[]") // Array of unlocked area IDs
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  plots         GardenPlot[]
+  creatures     GardenCreature[]
+  gifts         GardenGift[]
+}
+
+model GardenPlot {
+  id             String       @id @default(uuid())
+  gardenId       String
+  garden         SharedGarden @relation(fields: [gardenId], references: [id], onDelete: Cascade)
+  ownerId        String
+  owner          User         @relation(fields: [ownerId], references: [id])
+  positionX      Int
+  positionY      Int
+  areaId         String       @default("main")
+
+  // Plant data
+  plantType    String?
+  plantedAt    DateTime?
+  wateredAt    DateTime?
+  wateredBy    String?   // User ID of who last watered
+  growthStage  Int       @default(0)
+  isFullyGrown Boolean   @default(false)
+
+  // Decoration data (if not a plant)
+  decorationType String?
+  decorationData Json?
+
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  attachedVoiceMessage String?  // Voice message ID
+
+  @@unique([gardenId, positionX, positionY])
+  @@index([gardenId])
+  @@index([ownerId])
+}
+
+model GardenCreature {
+  id           String       @id @default(uuid())
+  gardenId     String
+  garden       SharedGarden @relation(fields: [gardenId], references: [id], onDelete: Cascade)
+  creatureType String
+  name         String?
+  discoveredBy String       // User ID
+  discoveredAt DateTime     @default(now())
+  lastSeenAt   DateTime     @default(now())
+  favoriteSpot Json?        // {x, y} coordinates
+
+  @@index([gardenId])
+}
+
+model GardenGift {
+  id             String       @id @default(uuid())
+  gardenId       String
+  garden         SharedGarden @relation(fields: [gardenId], references: [id], onDelete: Cascade)
+  fromUserId     String
+  toUserId       String
+  giftType       String       // "seeds", "decoration", "tool", "creature_treat"
+  giftData       Json         // Specific gift details
+  message        String?
+  voiceMessageId String?
+  isOpened       Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  openedAt       DateTime?
+
+  @@index([gardenId, toUserId, isOpened])
+}
+
+model GardenInventory {
+  id            String      @id @default(uuid())
+  partnershipId String
+  partnership   Partnership @relation(fields: [partnershipId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  itemType      String      // "seed", "decoration", "tool"
+  itemKey       String      // Specific item identifier
+  quantity      Int         @default(1)
+
+  @@unique([partnershipId, userId, itemType, itemKey])
+}
+
+// ==================== GAME: DOODLE DUO ====================
+
+model DoodleSession {
+  id            String            @id @default(uuid())
+  partnershipId String
+  partnership   Partnership       @relation(fields: [partnershipId], references: [id], onDelete: Cascade)
+  gameMode      DoodleGameMode
+  status        GameSessionStatus @default(IN_PROGRESS)
+  currentTurn   String?           // User ID whose turn it is
+  roundNumber   Int               @default(1)
+  maxRounds     Int               @default(5)
+  scores        Json              @default("{}") // {userId: score}
+  settings      Json?             // Game-specific settings
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  completedAt   DateTime?
+  drawings      Drawing[]
+
+  @@index([partnershipId, status])
+}
+
+enum DoodleGameMode {
+  FINISH_DRAWING // One starts, other completes
+  GUESS_DOODLE   // Pictionary style
+  COPY_CAT       // Replicate partner's drawing
+  COLLABORATIVE  // Build together over time
+}
+
+enum GameSessionStatus {
+  IN_PROGRESS
+  WAITING_FOR_PARTNER
+  COMPLETED
+  ABANDONED
+}
+
+model Drawing {
+  id          String         @id @default(uuid())
+  sessionId   String?
+  session     DoodleSession? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  artistId    String
+  artist      User           @relation(fields: [artistId], references: [id])
+
+  // Drawing data
+  canvasData   Json    // Stores strokes, shapes, etc.
+  imageUrl     String? // Rendered PNG for gallery
+  thumbnailUrl String?
+
+  // Game context
+  promptWord String?  // For guess mode
+  isGuessed  Boolean  @default(false)
+  guessedBy  String?
+  guessedWord String?
+
+  // Collaborative drawing
+  isPartOfChain Boolean @default(false)
+  chainOrder    Int?
+
+  // Voice message attachment
+  voiceMessageId String?
+
+  // Gallery
+  isSavedToGallery Boolean @default(false)
+  title            String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sessionId])
+  @@index([artistId])
+}
+
+model DoodleGallery {
+  id            String      @id @default(uuid())
+  partnershipId String      @unique
+  partnership   Partnership @relation(fields: [partnershipId], references: [id], onDelete: Cascade)
+  drawingIds    Json        @default("[]") // Array of drawing IDs
+  createdAt     DateTime    @default(now())
+}
+
+model DoodleUnlockable {
+  id            String      @id @default(uuid())
+  partnershipId String
+  partnership   Partnership @relation(fields: [partnershipId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  itemType      String      // "brush", "color", "sticker", "background"
+  itemKey       String
+  unlockedAt    DateTime    @default(now())
+
+  @@unique([partnershipId, userId, itemType, itemKey])
+}
+
+// ==================== GAME: TREASURE HUNTERS ====================
+
+model TreasureMap {
+  id              String             @id @default(uuid())
+  partnershipId   String             @unique
+  partnership     Partnership        @relation(fields: [partnershipId], references: [id], onDelete: Cascade)
+  currentWorld    String             @default("enchanted_forest")
+  unlockedWorlds  Json               @default("[\"enchanted_forest\"]")
+  totalTreasures  Int                @default(0)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  progress        TreasureProgress[]
+  hiddenTreasures HiddenTreasure[]
+  mapMarkers      MapMarker[]
+}
+
+model TreasureProgress {
+  id        String      @id @default(uuid())
+  mapId     String
+  map       TreasureMap @relation(fields: [mapId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User        @relation(fields: [userId], references: [id])
+  worldId   String
+  exploredAreas Json    @default("[]") // Array of area IDs
+  foundItems    Json    @default("[]") // Array of item IDs
+  solvedPuzzles Json    @default("[]") // Array of puzzle IDs
+
+  // Player position
+  lastPositionX Float?
+  lastPositionY Float?
+
+  // Collection book
+  collectionBook Json @default("{}") // {category: [itemIds]}
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([mapId, userId, worldId])
+  @@index([mapId, userId])
+}
+
+model HiddenTreasure {
+  id             String      @id @default(uuid())
+  mapId          String
+  map            TreasureMap @relation(fields: [mapId], references: [id], onDelete: Cascade)
+  hiddenByUserId String
+  forUserId      String
+  worldId        String
+  positionX      Float
+  positionY      Float
+  treasureType   String      // "item", "clue", "voice_message", "mini_game"
+  treasureData   Json
+  voiceClueId    String?     // Voice message with hint
+  isFound        Boolean     @default(false)
+  foundAt        DateTime?
+  expiresAt      DateTime?   // For time-limited treasures
+  createdAt      DateTime    @default(now())
+
+  @@index([mapId, forUserId, isFound])
+}
+
+model MapMarker {
+  id              String      @id @default(uuid())
+  mapId           String
+  map             TreasureMap @relation(fields: [mapId], references: [id], onDelete: Cascade)
+  createdByUserId String
+  worldId         String
+  positionX       Float
+  positionY       Float
+  markerType      String      // "flag", "star", "question", "heart", "custom"
+  note            String?
+  voiceNoteId     String?
+  color           String      @default("#FF6B6B")
+  isShared        Boolean     @default(true)
+  createdAt       DateTime    @default(now())
+
+  @@index([mapId, worldId])
+}
+
+model TreasureInventory {
+  id            String      @id @default(uuid())
+  partnershipId String
+  partnership   Partnership @relation(fields: [partnershipId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  itemType      String
+  itemKey       String
+  quantity      Int         @default(1)
+  foundAt       DateTime    @default(now())
+
+  @@unique([partnershipId, userId, itemType, itemKey])
+}
+
+// ==================== WORLD DATA (Reference Tables) ====================
+
+model GameWorld {
+  id                String  @id @default(uuid())
+  gameType          String  // "treasure", "garden"
+  worldKey          String  @unique
+  name              String
+  description       String
+  thumbnailUrl      String
+  mapData           Json    // World layout, areas, spawn points
+  items             Json    // Available items in this world
+  puzzles           Json    // Puzzles in this world
+  creatures         Json?   // For garden
+  unlockRequirement Json?   // What's needed to unlock
+  sortOrder         Int     @default(0)
+
+  @@index([gameType])
+}
+
+// ==================== WORD BANK FOR DOODLE DUO ====================
+
+model WordBank {
+  id       String @id @default(uuid())
+  word     String
+  category String // "animals", "food", "objects", "actions", "fantasy", "science"
+  difficulty Int  @default(1) // 1-3 difficulty level
+
+  @@unique([word, category])
+  @@index([category])
+}
